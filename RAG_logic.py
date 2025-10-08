@@ -8,12 +8,13 @@ import chromadb
 from dotenv import load_dotenv
 from groq import Groq
 import uuid
+from dotenv import load_dotenv
 
+# Load environment variables from .env file
+load_dotenv()
 # Suppress warnings to keep the output clean
 warnings.filterwarnings("ignore")
 
-# Loading environment variables 
-load_dotenv()
 
 # Retrieve the GROQ API key from environment variables
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
