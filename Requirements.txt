@@ -11,3 +11,4 @@ deep-translator
 nest_asyncio
 streamlit 
 nginx
+pdfplumber  
