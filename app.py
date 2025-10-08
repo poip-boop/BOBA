@@ -188,8 +188,7 @@ def setup_knowledge_base():
 
 # ---------------------- STREAMLIT UI ----------------------
 st.set_page_config(
-    page_title="Kenyan Constitution Assistant", 
-    page_icon="🇰🇪", 
+    page_title="Legal Assistant", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -570,7 +569,7 @@ st.markdown("""
         Data Source: <strong>Constitution of Kenya 2010</strong>
     </p>
     <p style="font-size: 0.85rem; color: #666;">
-        Developed with 🇰🇪 by Synergy • © 2025 All Rights Reserved
+        Developed by Synergy • © 2025 All Rights Reserved
     </p>
 </div>
 """, unsafe_allow_html=True)
