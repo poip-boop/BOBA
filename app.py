@@ -467,8 +467,8 @@ st.markdown('<div class="main-header"></div>', unsafe_allow_html=True)
 # Title section
 st.markdown("""
 <div class="title-container animate-in">
-    <div class="flag-emoji">🇰🇪</div>
-    <h1>Kenyan Constitution Assistant</h1>
+    <div class="flag-emoji">KENYA</div>
+    <h1>Legal Assistant</h1>
     <p>Your AI-powered legal companion for constitutional queries</p>
 </div>
 """, unsafe_allow_html=True)
