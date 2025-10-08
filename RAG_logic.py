@@ -5,53 +5,72 @@ import pdfplumber
 import spacy
 from sentence_transformers import SentenceTransformer
 import chromadb
+from chromadb.config import Settings
 from dotenv import load_dotenv
 from groq import Groq
 import uuid
-from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 # Suppress warnings to keep the output clean
 warnings.filterwarnings("ignore")
 
+# ------------------ ENVIRONMENT SETUP ------------------ #
 
 # Retrieve the GROQ API key from environment variables
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY not found in .env file")
 
-# Initialize the Groq client for generating responses
+# Initialize the Groq client
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Load spaCy model for NLP tasks 
+# Load spaCy model
 nlp = spacy.load("en_core_web_sm")
 
-# Initialize SentenceTransformer for generating text embeddings
+# Initialize SentenceTransformer for embeddings
 embedder = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Initialize ChromaDB client for persistent vector storage
-chroma_client = chromadb.PersistentClient(path="./chroma_db")
+# ------------------ CHROMADB SETUP ------------------ #
 
-# Create or get a collection named "constitution" in ChromaDB
-collection = chroma_client.get_or_create_collection(name="constitution")
+# Use persistent storage if available, otherwise in-memory (useful for Streamlit Cloud)
+CHROMA_DB_PATH = "./chroma_db" if os.path.exists("./chroma_db") else None
+chroma_client = chromadb.Client(
+    Settings(
+        chroma_db_impl="duckdb+parquet",
+        persist_directory=CHROMA_DB_PATH
+    )
+)
 
-# Define the path to the Constitution PDF using a relative path
+# Create or get collection safely
+try:
+    collection = chroma_client.get_or_create_collection(name="constitution")
+except Exception as e:
+    # If schema mismatch occurs, recreate DB
+    if CHROMA_DB_PATH:
+        import shutil
+        shutil.rmtree(CHROMA_DB_PATH, ignore_errors=True)
+    chroma_client = chromadb.Client(
+        Settings(chroma_db_impl="duckdb+parquet", persist_directory=CHROMA_DB_PATH)
+    )
+    collection = chroma_client.get_or_create_collection(name="constitution")
+
+# ------------------ PDF SETUP ------------------ #
+
 PDF_PATH = os.path.join(os.path.dirname(__file__), "COK.pdf")
+if not os.path.exists(PDF_PATH):
+    raise FileNotFoundError(f"PDF file not found at {PDF_PATH}")
 
-# Function to extract text from a PDF file
+# ------------------ FUNCTION DEFINITIONS ------------------ #
+
 def extract_text_from_pdf(pdf_path):
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            text = ""
-            for page in pdf.pages:
-                text += page.extract_text() or ""
-        return text
-    except FileNotFoundError:
-        raise FileNotFoundError(f"PDF file not found at {pdf_path}")
+    """Extract text from each page of a PDF file."""
+    with pdfplumber.open(pdf_path) as pdf:
+        text = "".join([page.extract_text() or "" for page in pdf.pages])
+    return text
 
-# Function to chunk text into smaller pieces for embedding
 def chunk_text(text, max_tokens=500):
+    """Split text into chunks of roughly max_tokens using spaCy sentences."""
     doc = nlp(text)
     chunks = []
     current_chunk = ""
@@ -71,18 +90,18 @@ def chunk_text(text, max_tokens=500):
         chunks.append(current_chunk.strip())
     return chunks
 
-# Function to embed text chunks and store them in ChromaDB
 def embed_and_store(chunks):
+    """Embed text chunks and store in ChromaDB collection."""
     embeddings = embedder.encode(chunks)
-    for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+    for chunk, embedding in zip(chunks, embeddings):
         collection.add(
             documents=[chunk],
             embeddings=[embedding.tolist()],
             ids=[str(uuid.uuid4())]
         )
 
-# Function to query the Constitution knowledge base using a text query
 def query_constitution(query, n_results=5):
+    """Retrieve relevant documents from ChromaDB based on query."""
     query_embedding = embedder.encode([query])[0]
     results = collection.query(
         query_embeddings=[query_embedding.tolist()],
@@ -90,8 +109,8 @@ def query_constitution(query, n_results=5):
     )
     return results['documents'][0]
 
-# Function to generate a response using Groq API based on the query and context
 def generate_response(query, context):
+    """Generate a response using Groq LLM based on query and context."""
     prompt = f"""
     You are a legal assistant specializing in the Kenyan Constitution. Based on the following context from the Kenyan Constitution, answer the query accurately and concisely. If the context is insufficient, indicate so and provide a general response based on your knowledge.
 
@@ -103,7 +122,6 @@ def generate_response(query, context):
 
     Answer:
     """
-    # Call the Groq API to generate a response
     response = groq_client.chat.completions.create(
         messages=[
             {"role": "system", "content": "You are a knowledgeable legal assistant."},
@@ -114,8 +132,8 @@ def generate_response(query, context):
     )
     return response.choices[0].message.content
 
-# Function to set up the knowledge base by processing the Constitution PDF
 def setup_knowledge_base():
+    """Process PDF and populate ChromaDB if empty."""
     if collection.count() == 0:
         print("Processing Kenyan Constitution PDF...")
         text = extract_text_from_pdf(PDF_PATH)
