@@ -31,11 +31,14 @@ if not GROQ_API_KEY:
 @st.cache_resource
 def load_models():
     """Load heavy models once and cache them"""
+    import spacy.cli  # For programmatic download
+    
     try:
         nlp = spacy.load("en_core_web_sm")
     except OSError:
-        st.error("Spacy model not found. Run: python -m spacy download en_core_web_sm")
-        st.stop()
+        st.info("Downloading spaCy model 'en_core_web_sm' automatically...")
+        spacy.cli.download("en_core_web_sm")
+        nlp = spacy.load("en_core_web_sm")
     
     # Better embedding model for legal text
     embedder = SentenceTransformer('BAAI/bge-small-en-v1.5')
@@ -45,8 +48,6 @@ def load_models():
     
     groq_client = Groq(api_key=GROQ_API_KEY)
     return nlp, embedder, reranker, groq_client
-
-nlp, embedder, reranker, groq_client = load_models()
 
 # ---------------------- CHROMADB SETUP ----------------------
 @st.cache_resource
@@ -72,8 +73,6 @@ def init_chromadb():
             metadata={"hnsw:space": "cosine"}
         )
         return client, collection
-
-chroma_client, collection = init_chromadb()
 
 # ---------------------- QUERY TRANSFORMATION ----------------------
 def generate_query_variations(query: str) -> List[str]:
@@ -134,8 +133,6 @@ def get_pdf_path():
     
     st.error("⚠️ COK.pdf not found. Please upload the Kenyan Constitution PDF.")
     st.stop()
-
-PDF_PATH = get_pdf_path()
 
 @st.cache_data
 def extract_text_from_pdf(pdf_path):
@@ -242,6 +239,17 @@ def embed_and_store(chunks: List[Dict]):
     
     progress_bar.empty()
     status_text.empty()
+
+@st.cache_resource
+def setup_knowledge_base():
+    """Initialize knowledge base on first run"""
+    if collection.count() == 0:
+        with st.spinner("🔄 Setting up knowledge base... This may take a minute."):
+            text_data = extract_text_from_pdf(PDF_PATH)
+            chunks = improved_chunk_text(text_data, chunk_size=400, overlap=100)
+            embed_and_store(chunks)
+            st.success(f"✅ Knowledge base ready! Indexed {len(chunks)} chunks.")
+    return True
 
 def hybrid_search(query: str, n_results=15) -> List[Dict]:
     """
@@ -367,16 +375,10 @@ ANSWER:"""
     except Exception as e:
         return f"Error generating response: {str(e)}\n\nPlease try again or rephrase your question."
 
-@st.cache_resource
-def setup_knowledge_base():
-    """Initialize knowledge base on first run"""
-    if collection.count() == 0:
-        with st.spinner("🔄 Setting up knowledge base... This may take a minute."):
-            text_data = extract_text_from_pdf(PDF_PATH)
-            chunks = improved_chunk_text(text_data, chunk_size=400, overlap=100)
-            embed_and_store(chunks)
-            st.success(f"✅ Knowledge base ready! Indexed {len(chunks)} chunks.")
-    return True
+# Load models and initialize globals after definitions
+nlp, embedder, reranker, groq_client = load_models()
+chroma_client, collection = init_chromadb()
+PDF_PATH = get_pdf_path()
 
 # ---------------------- STREAMLIT UI ----------------------
 st.set_page_config(

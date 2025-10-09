@@ -1,11 +1,12 @@
-numpy>=1.26,<2.0
+numpy==1.26.4
 spacy==3.7.2
-thinc>=8.2.3,<9.0.0
-sentence-transformers>=2.3.0
-torch>=2.2.0
-chromadb>=0.4.0
-groq>=0.4.0
-streamlit>=1.31.0
-pdfplumber>=0.10.3
-python-dotenv>=1.0.0
-regex>=2023.0.0
+thinc==8.2.3  # Pin exactly to avoid any drift; <9.0.0 but specify for safety
+sentence-transformers==2.3.0  # Pin to minimum; update if needed
+torch==2.4.1  # Pin a stable version >=2.2.0; avoids conflicts
+chromadb==0.4.0  # Pin exactly
+groq==0.4.0  # Pin exactly
+streamlit==1.31.0  # Pin exactly
+pdfplumber==0.10.3  # Pin exactly
+python-dotenv==1.0.0  # Pin exactly
+regex==2023.12.25  # Pin a specific >=2023.0.0
+en-core-web-sm==3.7.1  # Installs the spaCy model as a package; compatible with spacy==3.7.2
