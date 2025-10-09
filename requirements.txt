@@ -12,3 +12,8 @@ nest_asyncio
 streamlit 
 pdfplumber  
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
+torch==2.1.2
+transformers==4.37.2
+numpy==1.24.3
+pandas==2.1.4
+regex==2023.12.25
