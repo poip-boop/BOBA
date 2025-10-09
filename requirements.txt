@@ -1,12 +1,11 @@
-numpy==1.26.4  # Compatible with spaCy 3.7.2 and Thinc 8.2.3
+numpy==1.26.4
 spacy==3.7.2
-thinc==8.2.3  # Exact pin for safety
+thinc==8.2.3
 sentence-transformers==2.3.0
-torch==2.4.1  # Stable version; prevents pulling newer NumPy
+torch==2.4.1
 chromadb==0.4.0
 groq==0.4.0
 streamlit==1.31.0
 pdfplumber==0.10.3
 python-dotenv==1.0.0
 regex==2023.12.25
-en-core-web-sm==3.7.1  # Installs spaCy model via pip
