@@ -406,7 +406,7 @@ ANSWER:"""
 
 # ---------------------- STREAMLIT UI ----------------------
 st.set_page_config(
-    page_title="Kenyan Constitution Assistant", 
+    page_title="Legal Assistant", 
     page_icon="🇰🇪", 
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -430,8 +430,8 @@ st.markdown('<div class="main-header"></div>', unsafe_allow_html=True)
 
 st.markdown("""
 <div class="title-container">
-    <h1>🇰🇪 Kenyan Constitution Assistant</h1>
-    <p>AI-powered legal companion with enhanced RAG pipeline</p>
+    <h1>🇰🇪 Kenyan Legal Assistant</h1>
+    <p>AI-powered legal companion</p>
 </div>
 """, unsafe_allow_html=True)
 
