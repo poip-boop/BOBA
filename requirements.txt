@@ -1,22 +1,13 @@
-# Core runtime
-streamlit==1.31.0
+numpy==1.26.4
+spacy==3.7.2
+thinc==8.2.3
+sentence-transformers==2.3.0
+cross-encoder==1.5.0  # Explicitly pin to latest compatible version
+torch==2.4.1
 chromadb==0.4.0
 groq==0.4.0
+streamlit==1.31.0
 pdfplumber==0.10.3
 python-dotenv==1.0.0
 regex==2023.12.25
-
-# ML / NLP (pick smaller, more deploy-friendly models)
-spacy==3.7.2
-
-# Small sentence-transformer to reduce download size (faster to install)
-sentence-transformers==2.3.0
-cross-encoder==0.4.3
-
-# Optional heavy dependency: torch — keep or remove depending on build-time limits
-# If deployment fails during pip install (torch is large), remove this line and
-# switch to an embeddings API (Groq/OpenAI) instead of local SentenceTransformer.
-torch==2.4.1
-
-# SpaCy small English model (install at build time)
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
