@@ -241,15 +241,18 @@ def embed_and_store(chunks: List[Dict]):
     status_text.empty()
 
 @st.cache_resource
-def setup_knowledge_base():
-    """Initialize knowledge base on first run"""
-    if collection.count() == 0:
-        with st.spinner("🔄 Setting up knowledge base... This may take a minute."):
-            text_data = extract_text_from_pdf(PDF_PATH)
-            chunks = improved_chunk_text(text_data, chunk_size=400, overlap=100)
-            embed_and_store(chunks)
-            st.success(f"✅ Knowledge base ready! Indexed {len(chunks)} chunks.")
-    return True
+def load_models():
+    """Load heavy models once and cache them"""
+    nlp = spacy.load("en_core_web_sm")  # No try-except needed; it's pre-installed
+
+    # Better embedding model for legal text
+    embedder = SentenceTransformer('BAAI/bge-small-en-v1.5')
+
+    # Free reranking model for better relevance
+    reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+
+    groq_client = Groq(api_key=GROQ_API_KEY)
+    return nlp, embedder, reranker, groq_client
 
 def hybrid_search(query: str, n_results=15) -> List[Dict]:
     """

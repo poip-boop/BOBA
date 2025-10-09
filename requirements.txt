@@ -9,3 +9,4 @@ streamlit==1.31.0
 pdfplumber==0.10.3
 python-dotenv==1.0.0
 regex==2023.12.25
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
