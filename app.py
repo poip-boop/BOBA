@@ -12,6 +12,8 @@ import uuid
 from dotenv import load_dotenv
 import re
 from typing import List, Dict
+import shutil
+import sys
 
 # ---------------------- ENVIRONMENT SETUP ----------------------
 load_dotenv()
@@ -25,30 +27,61 @@ except:
 
 if not GROQ_API_KEY:
     st.error("⚠️ GROQ_API_KEY not found. Please configure it in Streamlit secrets.")
+    st.info("""
+    To set up your API key:
+    1. Go to your Streamlit app dashboard
+    2. Click on 'Settings' → 'Secrets'
+    3. Add: `GROQ_API_KEY = "your-api-key-here"`
+    4. Get your API key from https://console.groq.com
+    """)
     st.stop()
 
+# ---------------------- INITIALIZATION FLAGS ----------------------
+if 'initialized' not in st.session_state:
+    st.session_state.initialized = False
+    st.session_state.kb_ready = False
+
 # ---------------------- CACHED RESOURCES ----------------------
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_models():
     """Load heavy models once and cache them"""
-    nlp = spacy.load("en_core_web_sm")  # Pre-installed via requirements.txt
-    
-    # Better embedding model for legal text
-    embedder = SentenceTransformer('BAAI/bge-small-en-v1.5')
-    
-    # Free reranking model for better relevance
-    reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-    
-    groq_client = Groq(api_key=GROQ_API_KEY)
-    return nlp, embedder, reranker, groq_client
+    try:
+        # Try to load spacy model
+        try:
+            nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            # If model not found, download it
+            os.system("python -m spacy download en_core_web_sm")
+            nlp = spacy.load("en_core_web_sm")
+        
+        # Load embedding model - using a smaller model for faster loading
+        with st.spinner("Loading embedding model..."):
+            embedder = SentenceTransformer('all-MiniLM-L6-v2')  # Smaller, faster model
+        
+        # Load reranking model
+        with st.spinner("Loading reranking model..."):
+            reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        
+        # Initialize Groq client
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        
+        return nlp, embedder, reranker, groq_client
+    except Exception as e:
+        st.error(f"Error loading models: {str(e)}")
+        st.stop()
 
 # ---------------------- CHROMADB SETUP ----------------------
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def init_chromadb():
     """Initialize ChromaDB with proper error handling"""
-    CHROMA_DB_PATH = "./chroma_db"
+    # Use temp directory for Streamlit Cloud
+    CHROMA_DB_PATH = "/tmp/chroma_db" if os.path.exists("/tmp") else "./chroma_db"
     
     try:
+        # Clear any existing database to avoid conflicts
+        if os.path.exists(CHROMA_DB_PATH):
+            shutil.rmtree(CHROMA_DB_PATH, ignore_errors=True)
+        
         client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
         collection = client.get_or_create_collection(
             name="constitution",
@@ -56,60 +89,14 @@ def init_chromadb():
         )
         return client, collection
     except Exception as e:
-        st.warning(f"ChromaDB initialization issue: {e}. Creating fresh database.")
-        import shutil
-        if os.path.exists(CHROMA_DB_PATH):
-            shutil.rmtree(CHROMA_DB_PATH, ignore_errors=True)
-        client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        st.error(f"ChromaDB initialization failed: {e}")
+        # Fallback to in-memory database
+        client = chromadb.Client()
         collection = client.get_or_create_collection(
             name="constitution",
             metadata={"hnsw:space": "cosine"}
         )
         return client, collection
-
-# ---------------------- QUERY TRANSFORMATION ----------------------
-def generate_query_variations(query: str) -> List[str]:
-    """Generate multiple query variations for better retrieval"""
-    variations = [query]
-    
-    # Use LLM to generate query variations
-    try:
-        response = groq_client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": "You are a query expansion expert. Generate 2 alternative phrasings of the user's question that maintain the same meaning but use different legal terminology."},
-                {"role": "user", "content": f"Original question: {query}\n\nGenerate 2 variations (one per line):"}
-            ],
-            model="llama-3.1-8b-instant",  # Faster model for query transformation
-            max_tokens=150,
-            temperature=0.7
-        )
-        
-        new_queries = response.choices[0].message.content.strip().split('\n')
-        variations.extend([q.strip('- 123.') for q in new_queries if q.strip()])
-    except:
-        pass
-    
-    return variations[:3]  # Limit to 3 variations
-
-def extract_legal_entities(query: str) -> List[str]:
-    """Extract legal entities and keywords from query"""
-    doc = nlp(query)
-    entities = []
-    
-    # Extract named entities
-    for ent in doc.ents:
-        if ent.label_ in ['LAW', 'ORG', 'GPE', 'PERSON']:
-            entities.append(ent.text)
-    
-    # Extract legal keywords
-    legal_keywords = ['right', 'freedom', 'duty', 'article', 'chapter', 'constitution', 
-                      'law', 'court', 'parliament', 'president', 'citizen', 'government']
-    
-    for token in doc:
-        if token.text.lower() in legal_keywords:
-            entities.append(token.text)
-    
-    return list(set(entities))
 
 # ---------------------- PDF & KNOWLEDGE BASE ----------------------
 def get_pdf_path():
@@ -124,29 +111,41 @@ def get_pdf_path():
         if os.path.exists(path):
             return path
     
-    st.error("⚠️ COK.pdf not found. Please upload the Kenyan Constitution PDF.")
+    # If PDF not found, provide upload option
+    st.error("⚠️ COK.pdf not found in the repository.")
+    st.info("Please add COK.pdf to your GitHub repository root directory.")
+    
+    # Provide manual upload option
+    uploaded_file = st.file_uploader("Or upload the Constitution PDF here:", type=['pdf'])
+    if uploaded_file:
+        # Save uploaded file
+        with open("COK.pdf", "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        return "COK.pdf"
+    
     st.stop()
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def extract_text_from_pdf(pdf_path):
     """Extract and cache PDF text with better structure preservation"""
     text_chunks = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages):
-            text = page.extract_text() or ""
-            if text.strip():
-                text_chunks.append({
-                    'text': text,
-                    'page': page_num + 1
-                })
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                if text.strip():
+                    text_chunks.append({
+                        'text': text,
+                        'page': page_num + 1
+                    })
+    except Exception as e:
+        st.error(f"Error reading PDF: {str(e)}")
+        st.stop()
     return text_chunks
 
 def improved_chunk_text(text_data: List[Dict], chunk_size=400, overlap=100):
     """
-    Improved chunking strategy for legal documents:
-    - Preserves article/section boundaries
-    - Maintains context with overlap
-    - Includes metadata (page numbers, sections)
+    Improved chunking strategy for legal documents
     """
     chunks = []
     
@@ -200,132 +199,156 @@ def improved_chunk_text(text_data: List[Dict], chunk_size=400, overlap=100):
     
     return chunks
 
-def embed_and_store(chunks: List[Dict]):
+def embed_and_store(chunks: List[Dict], embedder, collection):
     """Embed chunks and store in ChromaDB with metadata"""
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    for i in range(0, len(chunks), 50):
-        batch = chunks[i:i+50]
+    batch_size = 10  # Smaller batch size for stability
+    
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i:i+batch_size]
         texts = [chunk['text'] for chunk in batch]
-        embeddings = embedder.encode(texts, show_progress_bar=False)
         
-        # Prepare metadata
-        metadatas = []
-        for chunk in batch:
-            metadata = {
-                'page': str(chunk['metadata']['page']),
-                'section': chunk['metadata'].get('section', '')
-            }
-            metadatas.append(metadata)
+        try:
+            embeddings = embedder.encode(texts, show_progress_bar=False)
+            
+            # Prepare metadata
+            metadatas = []
+            for chunk in batch:
+                metadata = {
+                    'page': str(chunk['metadata']['page']),
+                    'section': chunk['metadata'].get('section', '')
+                }
+                metadatas.append(metadata)
+            
+            collection.add(
+                documents=texts,
+                embeddings=embeddings.tolist(),
+                metadatas=metadatas,
+                ids=[str(uuid.uuid4()) for _ in batch]
+            )
+        except Exception as e:
+            st.warning(f"Batch processing error: {e}. Continuing...")
+            continue
         
-        collection.add(
-            documents=texts,
-            embeddings=embeddings.tolist(),
-            metadatas=metadatas,
-            ids=[str(uuid.uuid4()) for _ in batch]
-        )
-        
-        progress = min((i + 50) / len(chunks), 1.0)
+        progress = min((i + batch_size) / len(chunks), 1.0)
         progress_bar.progress(progress)
         status_text.text(f"Processing: {int(progress * 100)}% complete")
     
     progress_bar.empty()
     status_text.empty()
 
-@st.cache_resource
-def setup_knowledge_base():
+def setup_knowledge_base(embedder, collection, pdf_path):
     """Initialize knowledge base on first run"""
     if collection.count() == 0:
         with st.spinner("🔄 Setting up knowledge base... This may take a minute."):
-            text_data = extract_text_from_pdf(PDF_PATH)
+            text_data = extract_text_from_pdf(pdf_path)
             chunks = improved_chunk_text(text_data, chunk_size=400, overlap=100)
-            embed_and_store(chunks)
+            embed_and_store(chunks, embedder, collection)
             st.success(f"✅ Knowledge base ready! Indexed {len(chunks)} chunks.")
+            return True
     return True
 
-def hybrid_search(query: str, n_results=15) -> List[Dict]:
-    """
-    Hybrid search combining:
-    1. Multiple query variations
-    2. Semantic search
-    3. Keyword boosting
-    """
+# ---------------------- QUERY FUNCTIONS ----------------------
+def generate_query_variations(query: str, groq_client) -> List[str]:
+    """Generate multiple query variations for better retrieval"""
+    variations = [query]
+    
+    try:
+        response = groq_client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "Generate 2 alternative phrasings of the question that maintain the same meaning."},
+                {"role": "user", "content": f"Original: {query}\n\nVariations:"}
+            ],
+            model="llama-3.1-8b-instant",
+            max_tokens=150,
+            temperature=0.7
+        )
+        
+        new_queries = response.choices[0].message.content.strip().split('\n')
+        variations.extend([q.strip('- 123.') for q in new_queries if q.strip()][:2])
+    except:
+        pass
+    
+    return variations[:3]
+
+def hybrid_search(query: str, embedder, collection, groq_client, n_results=15) -> List[Dict]:
+    """Hybrid search combining multiple query variations and semantic search"""
     all_results = []
     seen_docs = set()
     
     # Generate query variations
-    query_variations = generate_query_variations(query)
+    query_variations = generate_query_variations(query, groq_client)
     
     # Search with each variation
     for q in query_variations:
-        query_embedding = embedder.encode([q])[0]
-        results = collection.query(
-            query_embeddings=[query_embedding.tolist()],
-            n_results=n_results,
-            include=['documents', 'metadatas', 'distances']
-        )
-        
-        # Process results
-        if results['documents'] and results['documents'][0]:
-            for doc, metadata, distance in zip(
-                results['documents'][0],
-                results['metadatas'][0],
-                results['distances'][0]
-            ):
-                doc_hash = hash(doc[:100])  # Use first 100 chars as hash
-                if doc_hash not in seen_docs:
-                    seen_docs.add(doc_hash)
-                    all_results.append({
-                        'document': doc,
-                        'metadata': metadata,
-                        'distance': distance,
-                        'query': q
-                    })
+        try:
+            query_embedding = embedder.encode([q])[0]
+            results = collection.query(
+                query_embeddings=[query_embedding.tolist()],
+                n_results=n_results,
+                include=['documents', 'metadatas', 'distances']
+            )
+            
+            # Process results
+            if results['documents'] and results['documents'][0]:
+                for doc, metadata, distance in zip(
+                    results['documents'][0],
+                    results['metadatas'][0],
+                    results['distances'][0]
+                ):
+                    doc_hash = hash(doc[:100])
+                    if doc_hash not in seen_docs:
+                        seen_docs.add(doc_hash)
+                        all_results.append({
+                            'document': doc,
+                            'metadata': metadata,
+                            'distance': distance,
+                            'query': q
+                        })
+        except Exception as e:
+            st.warning(f"Search error: {e}")
+            continue
     
     return all_results
 
-def rerank_results(query: str, results: List[Dict], top_k=5) -> List[Dict]:
-    """
-    Rerank results using CrossEncoder for better relevance
-    """
+def rerank_results(query: str, results: List[Dict], reranker, top_k=5) -> List[Dict]:
+    """Rerank results using CrossEncoder for better relevance"""
     if not results:
         return []
     
-    # Prepare pairs for reranking
-    pairs = [[query, result['document']] for result in results]
-    
-    # Get reranking scores
-    scores = reranker.predict(pairs)
-    
-    # Add scores to results
-    for result, score in zip(results, scores):
-        result['rerank_score'] = float(score)
-    
-    # Sort by rerank score
-    reranked = sorted(results, key=lambda x: x['rerank_score'], reverse=True)
-    
-    return reranked[:top_k]
+    try:
+        # Prepare pairs for reranking
+        pairs = [[query, result['document']] for result in results]
+        
+        # Get reranking scores
+        scores = reranker.predict(pairs)
+        
+        # Add scores to results
+        for result, score in zip(results, scores):
+            result['rerank_score'] = float(score)
+        
+        # Sort by rerank score
+        reranked = sorted(results, key=lambda x: x['rerank_score'], reverse=True)
+        
+        return reranked[:top_k]
+    except Exception as e:
+        st.warning(f"Reranking error: {e}. Using original results.")
+        return results[:top_k]
 
-def query_constitution(query: str, n_results=5) -> List[Dict]:
-    """
-    Main retrieval function with multi-step querying:
-    1. Query transformation
-    2. Hybrid search
-    3. Reranking
-    """
+def query_constitution(query: str, embedder, collection, reranker, groq_client, n_results=5) -> List[Dict]:
+    """Main retrieval function with multi-step querying"""
     # Step 1: Hybrid search
-    initial_results = hybrid_search(query, n_results=15)
+    initial_results = hybrid_search(query, embedder, collection, groq_client, n_results=15)
     
     # Step 2: Rerank results
-    reranked_results = rerank_results(query, initial_results, top_k=n_results)
+    reranked_results = rerank_results(query, initial_results, reranker, top_k=n_results)
     
     return reranked_results
 
-def generate_response(query: str, context: List[Dict]) -> str:
-    """
-    Generate response using the best LLM model with improved prompting
-    """
+def generate_response(query: str, context: List[Dict], groq_client) -> str:
+    """Generate response using the best LLM model with improved prompting"""
     if not context:
         return "I couldn't find relevant information in the Constitution to answer your question. Please try rephrasing or ask about a different topic."
     
@@ -356,22 +379,30 @@ ANSWER:"""
     try:
         response = groq_client.chat.completions.create(
             messages=[
-                {"role": "system", "content": "You are an expert legal assistant specializing in Kenyan Constitutional Law. You provide accurate, well-structured answers based on the Constitution of Kenya 2010. Always cite specific articles and maintain professional legal language."},
+                {"role": "system", "content": "You are an expert legal assistant specializing in Kenyan Constitutional Law."},
                 {"role": "user", "content": prompt}
             ],
-            model="llama-3.3-70b-versatile",  # Best model for legal reasoning
+            model="llama-3.3-70b-versatile",
             max_tokens=1500,
-            temperature=0.1,  # Low temperature for factual accuracy
+            temperature=0.1,
             top_p=0.9
         )
         return response.choices[0].message.content
     except Exception as e:
-        return f"Error generating response: {str(e)}\n\nPlease try again or rephrase your question."
-
-# Load models and initialize globals after definitions
-nlp, embedder, reranker, groq_client = load_models()
-chroma_client, collection = init_chromadb()
-PDF_PATH = get_pdf_path()
+        # Fallback to smaller model if main model fails
+        try:
+            response = groq_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "You are an expert legal assistant."},
+                    {"role": "user", "content": prompt}
+                ],
+                model="llama-3.1-8b-instant",
+                max_tokens=1000,
+                temperature=0.1
+            )
+            return response.choices[0].message.content
+        except:
+            return f"Error generating response: {str(e)}\n\nPlease try again or rephrase your question."
 
 # ---------------------- STREAMLIT UI ----------------------
 st.set_page_config(
@@ -381,138 +412,103 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# CSS styling
+# CSS styling (shortened for deployment)
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     * { font-family: 'Inter', sans-serif; }
     .stApp { background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%); }
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
-    .main-header { background: linear-gradient(to right, #000000 0%, #000000 25%, #B91C1C 25%, #B91C1C 50%, #166534 50%, #166534 75%, #FFFFFF 75%, #FFFFFF 100%); height: 8px; width: 100%; margin-bottom: 30px; border-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-    .title-container { text-align: center; padding: 40px 20px 30px 20px; margin-bottom: 40px; background: linear-gradient(135deg, rgba(22, 101, 52, 0.1) 0%, rgba(185, 28, 28, 0.1) 100%); border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(10px); }
-    .title-container h1 { color: #FFFFFF; font-size: 3rem; font-weight: 700; margin: 0; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); background: linear-gradient(135deg, #FFFFFF 0%, #E5E5E5 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-    .title-container p { color: #B0B0B0; font-size: 1.2rem; margin-top: 10px; font-weight: 300; }
-    .flag-emoji { font-size: 4rem; margin-bottom: 10px; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3)); }
-    .input-section { background: rgba(26, 26, 26, 0.8); padding: 30px; border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.1); margin-bottom: 30px; backdrop-filter: blur(10px); box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
-    .stTextArea textarea { background: rgba(42, 42, 42, 0.9) !important; color: #FFFFFF !important; border: 2px solid rgba(22, 101, 52, 0.5) !important; border-radius: 12px !important; font-size: 1.1rem !important; padding: 15px !important; transition: all 0.3s ease !important; }
-    .stTextArea textarea:focus { border-color: #166534 !important; box-shadow: 0 0 20px rgba(22, 101, 52, 0.3) !important; }
-    .stButton > button { background: linear-gradient(135deg, #166534 0%, #22c55e 100%) !important; color: white !important; border: none !important; border-radius: 12px !important; padding: 15px 40px !important; font-size: 1.1rem !important; font-weight: 600 !important; transition: all 0.3s ease !important; box-shadow: 0 4px 15px rgba(22, 101, 52, 0.4) !important; text-transform: uppercase !important; letter-spacing: 1px !important; }
-    .stButton > button:hover { transform: translateY(-2px) !important; box-shadow: 0 6px 25px rgba(22, 101, 52, 0.6) !important; background: linear-gradient(135deg, #22c55e 0%, #166534 100%) !important; }
-    .response-box { background: linear-gradient(145deg, rgba(26, 26, 26, 0.95) 0%, rgba(42, 42, 42, 0.95) 100%); padding: 30px; border-left: 6px solid #B91C1C; border-radius: 15px; min-height: 150px; white-space: pre-wrap; font-size: 1.1rem; line-height: 1.8; color: #E5E5E5; box-shadow: 0 8px 32px rgba(0,0,0,0.4); margin: 20px 0; border: 1px solid rgba(185, 28, 28, 0.3); position: relative; overflow: hidden; }
-    .stat-card { flex: 1; min-width: 200px; background: linear-gradient(135deg, rgba(22, 101, 52, 0.2) 0%, rgba(185, 28, 28, 0.2) 100%); padding: 20px; border-radius: 15px; border: 1px solid rgba(255, 255, 255, 0.1); text-align: center; transition: all 0.3s ease; }
-    .stat-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(22, 101, 52, 0.3); }
-    .stat-number { font-size: 2.5rem; font-weight: 700; color: #22c55e; margin: 10px 0; }
-    .stat-label { color: #B0B0B0; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px; }
-    .streamlit-expanderHeader { background: rgba(22, 101, 52, 0.2) !important; border-radius: 10px !important; border: 1px solid rgba(22, 101, 52, 0.3) !important; color: #FFFFFF !important; font-weight: 600 !important; }
-    .source-card { background: rgba(42, 42, 42, 0.6); padding: 15px; border-radius: 10px; border-left: 3px solid #166534; margin: 10px 0; transition: all 0.3s ease; }
-    .custom-footer { text-align: center; padding: 40px 20px; margin-top: 60px; border-top: 1px solid rgba(255, 255, 255, 0.1); color: #888; }
-    .footer-logo { font-size: 1.5rem; font-weight: 700; background: linear-gradient(135deg, #166534 0%, #22c55e 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-    .animate-in { animation: fadeIn 0.6s ease-out; }
+    .main-header { background: linear-gradient(to right, #000000 0%, #000000 25%, #B91C1C 25%, #B91C1C 50%, #166534 50%, #166534 75%, #FFFFFF 75%, #FFFFFF 100%); height: 8px; width: 100%; margin-bottom: 30px; border-radius: 4px; }
+    .title-container { text-align: center; padding: 40px 20px 30px 20px; margin-bottom: 40px; background: linear-gradient(135deg, rgba(22, 101, 52, 0.1) 0%, rgba(185, 28, 28, 0.1) 100%); border-radius: 20px; }
+    .title-container h1 { color: #FFFFFF; font-size: 3rem; font-weight: 700; margin: 0; }
+    .title-container p { color: #B0B0B0; font-size: 1.2rem; margin-top: 10px; }
+    .response-box { background: linear-gradient(145deg, rgba(26, 26, 26, 0.95) 0%, rgba(42, 42, 42, 0.95) 100%); padding: 30px; border-left: 6px solid #B91C1C; border-radius: 15px; color: #E5E5E5; }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-header"></div>', unsafe_allow_html=True)
 
 st.markdown("""
-<div class="title-container animate-in">
-    <div class="flag-emoji">🇰🇪</div>
-    <h1>Kenyan Constitution Assistant</h1>
-    <p>Advanced AI-powered legal companion with enhanced RAG pipeline</p>
+<div class="title-container">
+    <h1>🇰🇪 Kenyan Constitution Assistant</h1>
+    <p>AI-powered legal companion with enhanced RAG pipeline</p>
 </div>
 """, unsafe_allow_html=True)
 
-kb_ready = setup_knowledge_base()
+# Initialize models and database
+if not st.session_state.initialized:
+    with st.spinner("🚀 Initializing AI models... This may take a moment on first run."):
+        try:
+            nlp, embedder, reranker, groq_client = load_models()
+            chroma_client, collection = init_chromadb()
+            PDF_PATH = get_pdf_path()
+            st.session_state.initialized = True
+            st.session_state.nlp = nlp
+            st.session_state.embedder = embedder
+            st.session_state.reranker = reranker
+            st.session_state.groq_client = groq_client
+            st.session_state.collection = collection
+            st.session_state.pdf_path = PDF_PATH
+        except Exception as e:
+            st.error(f"Initialization failed: {str(e)}")
+            st.stop()
 
-col1, col2 = st.columns([2, 1])
+# Setup knowledge base
+if st.session_state.initialized and not st.session_state.kb_ready:
+    st.session_state.kb_ready = setup_knowledge_base(
+        st.session_state.embedder, 
+        st.session_state.collection, 
+        st.session_state.pdf_path
+    )
+
+# Main interface
+col1, col2 = st.columns([3, 1])
 
 with col1:
-    st.markdown('<div class="input-section animate-in">', unsafe_allow_html=True)
     question = st.text_area(
         "💬 Ask Your Question",
         placeholder="e.g., What are the fundamental rights and freedoms guaranteed in the Constitution?",
-        height=150,
-        label_visibility="visible"
+        height=120
     )
     
     ask_button = st.button("🔍 Get Answer", use_container_width=True, type="primary")
-    st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
-    st.markdown(f"""
-    <div class="stat-card animate-in" style="animation-delay: 0.2s;">
-        <div class="stat-label">📚 Knowledge Base</div>
-        <div class="stat-number">{collection.count()}</div>
-        <div class="stat-label">Document Chunks</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div class="stat-card animate-in" style="animation-delay: 0.3s; margin-top: 20px;">
-        <div class="stat-label">🤖 AI Model</div>
-        <div style="color: #22c55e; font-size: 1.2rem; font-weight: 600; margin: 10px 0;">Llama 3.3 70B</div>
-        <div class="stat-label">With Reranking</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.metric("📚 Knowledge Base", f"{st.session_state.collection.count()} chunks")
+    st.metric("🤖 AI Model", "Llama 3.3 70B")
 
-if ask_button:
-    if not question.strip():
-        st.warning("⚠️ Please enter a question to continue.")
-    else:
-        with st.spinner("🤔 Analyzing your question with multi-step retrieval..."):
-            try:
-                context_results = query_constitution(question)
-                answer = generate_response(question, context_results)
-                
-                placeholder = st.empty()
-                typed_text = ""
-                
-                for char in answer:
-                    typed_text += char
-                    placeholder.markdown(
-                        f'<div class="response-box animate-in">{typed_text}<span style="color: #22c55e;">▋</span></div>', 
-                        unsafe_allow_html=True
-                    )
-                    time.sleep(0.008)
-                
-                placeholder.markdown(
-                    f'<div class="response-box animate-in">{answer}</div>', 
-                    unsafe_allow_html=True
-                )
-                
-                with st.expander("📚 View Supporting Sources with Relevance Scores", expanded=False):
-                    if context_results:
-                        for i, ctx in enumerate(context_results, 1):
-                            section = ctx['metadata'].get('section', 'General')
-                            page = ctx['metadata'].get('page', 'N/A')
-                            score = ctx.get('rerank_score', 0)
-                            
-                            st.markdown(f"""
-                            <div class="source-card">
-                                <strong style="color: #22c55e;">📄 Source {i}</strong>
-                                <span style="color: #888; font-size: 0.85rem;"> | {section} | Page {page} | Relevance: {score:.3f}</span><br/>
-                                <span style="color: #E5E5E5; font-size: 0.95rem;">
-                                {ctx['document'][:500] + "..." if len(ctx['document']) > 500 else ctx['document']}
-                                </span>
-                            </div>
-                            """, unsafe_allow_html=True)
-                    else:
-                        st.info("No specific sources found for this query.")
+if ask_button and question:
+    with st.spinner("🤔 Analyzing your question..."):
+        try:
+            context_results = query_constitution(
+                question,
+                st.session_state.embedder,
+                st.session_state.collection,
+                st.session_state.reranker,
+                st.session_state.groq_client
+            )
+            answer = generate_response(
+                question, 
+                context_results,
+                st.session_state.groq_client
+            )
+            
+            st.markdown(f'<div class="response-box">{answer}</div>', unsafe_allow_html=True)
+            
+            with st.expander("📚 View Supporting Sources", expanded=False):
+                if context_results:
+                    for i, ctx in enumerate(context_results, 1):
+                        st.write(f"**Source {i}** - {ctx['metadata'].get('section', 'General')} (Page {ctx['metadata'].get('page', 'N/A')})")
+                        st.write(ctx['document'][:500] + "..." if len(ctx['document']) > 500 else ctx['document'])
+                        st.divider()
                         
-            except Exception as e:
-                st.error(f"❌ An error occurred: {str(e)}")
-                st.info("Please try rephrasing your question or contact support if the issue persists.")
+        except Exception as e:
+            st.error(f"❌ An error occurred: {str(e)}")
+            st.info("Please try rephrasing your question.")
 
-st.markdown("""
-<div class="custom-footer">
-    <div class="footer-logo">SYNERGY</div>
-    <p>💡 <strong>Enhanced with:</strong> Query Transformation • Hybrid Search • Cross-Encoder Reranking</p>
-    <p style="margin-top: 20px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.1);">
-        Powered by <strong style="color: #22c55e;">Groq AI (Llama 3.3 70B)</strong> • 
-        Data: <strong>Constitution of Kenya 2010</strong>
-    </p>
-    <p style="font-size: 0.85rem; color: #666;">
-        Developed with 🇰🇪 by Synergy • © 2025 All Rights Reserved
-    </p>
-</div>
-""", unsafe_allow_html=True)
+elif ask_button:
+    st.warning("⚠️ Please enter a question to continue.")
+
+# Footer
+st.markdown("---")
+st.markdown("Powered by Groq AI • Constitution of Kenya 2010 • Developed by Synergy", unsafe_allow_html=True)

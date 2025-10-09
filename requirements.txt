@@ -2,7 +2,6 @@ numpy==1.26.4
 spacy==3.7.2
 thinc==8.2.3
 sentence-transformers==2.3.0
-cross-encoder==1.5.0  # Explicitly pin to latest compatible version
 torch==2.4.1
 chromadb==0.4.0
 groq==0.4.0
