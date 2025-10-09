@@ -31,14 +31,7 @@ if not GROQ_API_KEY:
 @st.cache_resource
 def load_models():
     """Load heavy models once and cache them"""
-    import spacy.cli  # For programmatic download
-    
-    try:
-        nlp = spacy.load("en_core_web_sm")
-    except OSError:
-        st.info("Downloading spaCy model 'en_core_web_sm' automatically...")
-        spacy.cli.download("en_core_web_sm")
-        nlp = spacy.load("en_core_web_sm")
+    nlp = spacy.load("en_core_web_sm")  # Pre-installed via requirements.txt
     
     # Better embedding model for legal text
     embedder = SentenceTransformer('BAAI/bge-small-en-v1.5')
@@ -110,7 +103,7 @@ def extract_legal_entities(query: str) -> List[str]:
     
     # Extract legal keywords
     legal_keywords = ['right', 'freedom', 'duty', 'article', 'chapter', 'constitution', 
-                     'law', 'court', 'parliament', 'president', 'citizen', 'government']
+                      'law', 'court', 'parliament', 'president', 'citizen', 'government']
     
     for token in doc:
         if token.text.lower() in legal_keywords:
@@ -241,18 +234,15 @@ def embed_and_store(chunks: List[Dict]):
     status_text.empty()
 
 @st.cache_resource
-def load_models():
-    """Load heavy models once and cache them"""
-    nlp = spacy.load("en_core_web_sm")  # Pre-installed via requirements.txt
-    
-    # Better embedding model for legal text
-    embedder = SentenceTransformer('BAAI/bge-small-en-v1.5')
-    
-    # Free reranking model for better relevance
-    reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-    
-    groq_client = Groq(api_key=GROQ_API_KEY)
-    return nlp, embedder, reranker, groq_client
+def setup_knowledge_base():
+    """Initialize knowledge base on first run"""
+    if collection.count() == 0:
+        with st.spinner("🔄 Setting up knowledge base... This may take a minute."):
+            text_data = extract_text_from_pdf(PDF_PATH)
+            chunks = improved_chunk_text(text_data, chunk_size=400, overlap=100)
+            embed_and_store(chunks)
+            st.success(f"✅ Knowledge base ready! Indexed {len(chunks)} chunks.")
+    return True
 
 def hybrid_search(query: str, n_results=15) -> List[Dict]:
     """
@@ -391,7 +381,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# [Previous CSS styling remains the same]
+# CSS styling
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
