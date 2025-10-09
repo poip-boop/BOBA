@@ -243,14 +243,14 @@ def embed_and_store(chunks: List[Dict]):
 @st.cache_resource
 def load_models():
     """Load heavy models once and cache them"""
-    nlp = spacy.load("en_core_web_sm")  # No try-except needed; it's pre-installed
-
+    nlp = spacy.load("en_core_web_sm")  # Pre-installed via requirements.txt
+    
     # Better embedding model for legal text
     embedder = SentenceTransformer('BAAI/bge-small-en-v1.5')
-
+    
     # Free reranking model for better relevance
     reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-
+    
     groq_client = Groq(api_key=GROQ_API_KEY)
     return nlp, embedder, reranker, groq_client
 
